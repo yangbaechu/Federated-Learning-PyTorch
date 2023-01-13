@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 import torch
 from torch.utils.data import DataLoader
-
+import os
 from utils import get_dataset
 from options import args_parser
 from update import test_inference
@@ -16,6 +16,7 @@ from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 
 
 if __name__ == '__main__':
+    os.environ['KMP_DUPLICATE_LIB_OK']='True'
     args = args_parser()
     if args.gpu:
         torch.cuda.set_device(args.gpu)
@@ -45,7 +46,7 @@ if __name__ == '__main__':
         exit('Error: unrecognized model')
 
     # Set the model to train and send it to device.
-    global_model.to(device)
+    #global_model.to(device)
     global_model.train()
     print(global_model)
 
@@ -59,14 +60,14 @@ if __name__ == '__main__':
                                      weight_decay=1e-4)
 
     trainloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    criterion = torch.nn.NLLLoss().to(device)
+    criterion = torch.nn.NLLLoss()#.to(device)
     epoch_loss = []
 
     for epoch in tqdm(range(args.epochs)):
         batch_loss = []
 
         for batch_idx, (images, labels) in enumerate(trainloader):
-            images, labels = images.to(device), labels.to(device)
+            #images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
             outputs = global_model(images)
@@ -89,8 +90,7 @@ if __name__ == '__main__':
     plt.plot(range(len(epoch_loss)), epoch_loss)
     plt.xlabel('epochs')
     plt.ylabel('Train loss')
-    plt.savefig('../save/nn_{}_{}_{}.png'.format(args.dataset, args.model,
-                                                 args.epochs))
+    plt.savefig('./save/nn_{}_{}_{}.png'.format(args.dataset, args.model,args.epochs))
 
     # testing
     test_acc, test_loss = test_inference(args, global_model, test_dataset)

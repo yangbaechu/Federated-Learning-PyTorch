@@ -5,6 +5,7 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
+import numpy as np
 
 
 class DatasetSplit(Dataset):
@@ -19,8 +20,15 @@ class DatasetSplit(Dataset):
         return len(self.idxs)
 
     def __getitem__(self, item):
-        image, label = self.dataset[self.idxs[item]]
-        return torch.tensor(image), torch.tensor(label)
+        measure_spectral = self.dataset.columns.slice_indexer('SPECR_01', 'SPECR_31')
+        paper_density = self.dataset.columns.slice_indexer('P_DENSITY', 'P_DENSITY')  # wdw only     (3)
+        paper_spectral = self.dataset.columns.slice_indexer('PAPER_SPECR_01','PAPER_SPECR_31')  # paper spectral only (31)
+        inks_combination = self.dataset.columns.slice_indexer('20120002','123')  # inks only (56)
+
+        Y = self.dataset.iloc[:, measure_spectral]  # Y input
+        X = self.dataset.iloc[:, np.r_[paper_density, paper_spectral, inks_combination]]  # normalized X input
+        
+        return torch.tensor(X.iloc[item,:].values), torch.tensor(Y.iloc[item,:].values)
 
 
 class LocalUpdate(object):
@@ -30,8 +38,8 @@ class LocalUpdate(object):
         self.trainloader, self.validloader, self.testloader = self.train_val_test(
             dataset, list(idxs))
         self.device = 'cuda' if args.gpu else 'cpu'
-        # Default criterion set to NLL loss function
-        self.criterion = nn.NLLLoss().to(self.device)
+        # Default criterion set to MSELoss loss function
+        self.criterion = nn.MSELoss()#.to(self.device)
 
     def train_val_test(self, dataset, idxs):
         """
@@ -66,24 +74,28 @@ class LocalUpdate(object):
 
         for iter in range(self.args.local_ep):
             batch_loss = []
-            for batch_idx, (images, labels) in enumerate(self.trainloader):
-                images, labels = images.to(self.device), labels.to(self.device)
+            for batch_idx, (X, Y) in enumerate(self.trainloader):
+                #images, labels = images.to(self.device), labels.to(self.device)
 
                 model.zero_grad()
-                log_probs = model(images)
-                loss = self.criterion(log_probs, labels)
+                X = X.to(torch.float32)
+                Y_predicted = model(X)
+
+                Y_predicted = Y_predicted.to(torch.float32)
+                Y = Y.to(torch.float32)
+                loss = self.criterion(Y_predicted, Y)
                 loss.backward()
                 optimizer.step()
 
                 if self.args.verbose and (batch_idx % 10 == 0):
                     print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                        global_round, iter, batch_idx * len(images),
+                        global_round, iter, batch_idx * len(X),
                         len(self.trainloader.dataset),
                         100. * batch_idx / len(self.trainloader), loss.item()))
-                self.logger.add_scalar('loss', loss.item())
+                self.logger.add_scalar('loss', loss.item(), global_round)
                 batch_loss.append(loss.item())
             epoch_loss.append(sum(batch_loss)/len(batch_loss))
-
+        
         return model.state_dict(), sum(epoch_loss) / len(epoch_loss)
 
     def inference(self, model):
@@ -93,49 +105,44 @@ class LocalUpdate(object):
         model.eval()
         loss, total, correct = 0.0, 0.0, 0.0
 
-        for batch_idx, (images, labels) in enumerate(self.testloader):
-            images, labels = images.to(self.device), labels.to(self.device)
+        for batch_idx, (X, Y) in enumerate(self.testloader):
+            #images, labels = images.to(self.device), labels.to(self.device)
 
             # Inference
-            outputs = model(images)
-            batch_loss = self.criterion(outputs, labels)
+            outputs = model(X)
+            batch_loss = self.criterion(outputs, Y)
             loss += batch_loss.item()
 
             # Prediction
             _, pred_labels = torch.max(outputs, 1)
             pred_labels = pred_labels.view(-1)
-            correct += torch.sum(torch.eq(pred_labels, labels)).item()
-            total += len(labels)
+            correct += torch.sum(torch.eq(pred_labels, Y)).item()
+            total += len(Y)
 
         accuracy = correct/total
         return accuracy, loss
 
 
 def test_inference(args, model, test_dataset):
-    """ Returns the test accuracy and loss.
+    """ Returns the test loss.
     """
 
     model.eval()
     loss, total, correct = 0.0, 0.0, 0.0
 
     device = 'cuda' if args.gpu else 'cpu'
-    criterion = nn.NLLLoss().to(device)
-    testloader = DataLoader(test_dataset, batch_size=128,
+    criterion = nn.MSELoss()#.to(device)
+    testloader = DataLoader(DatasetSplit(test_dataset, [i for i in range(len(test_dataset))]), batch_size=128,
                             shuffle=False)
-
-    for batch_idx, (images, labels) in enumerate(testloader):
-        images, labels = images.to(device), labels.to(device)
+    
+    for batch_idx, (X, Y) in enumerate(testloader):
+        #images, labels = images.to(device), labels.to(device)
 
         # Inference
-        outputs = model(images)
-        batch_loss = criterion(outputs, labels)
+        outputs = model(X.to(torch.float32))
+        batch_loss = criterion(outputs.to(torch.float32),  Y.to(torch.float32))
         loss += batch_loss.item()
-
-        # Prediction
-        _, pred_labels = torch.max(outputs, 1)
-        pred_labels = pred_labels.view(-1)
-        correct += torch.sum(torch.eq(pred_labels, labels)).item()
-        total += len(labels)
-
-    accuracy = correct/total
-    return accuracy, loss
+        
+        test_loss = loss/len(testloader)
+        print(test_loss)
+    return test_loss

@@ -33,6 +33,9 @@ python src/baseline_main.py --model=mlp --dataset=mnist --gpu=0 --epochs=10
 
 Federated experiment involves training a global model using many local models.
 
+색상 데이터 federated
+python src/federated_main.py --model=color --dataset=color --iid=1 --epochs=1
+
 * To run the federated experiment with CIFAR on CNN (IID):
 ```
 python src/federated_main.py --model=cnn --dataset=cifar --gpu=0 --iid=1 --epochs=10

@@ -7,6 +7,9 @@ import torch
 from torchvision import datasets, transforms
 from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal
 from sampling import cifar_iid, cifar_noniid
+import os
+import pandas as pd
+import numpy as np
 
 
 def get_dataset(args):
@@ -39,37 +42,33 @@ def get_dataset(args):
             else:
                 # Chose euqal splits for every user
                 user_groups = cifar_noniid(train_dataset, args.num_users)
+    
+    elif args.dataset == 'color':
+        
+        currentPath = os.getcwd()
+        data_location = currentPath + "\\data" 
+        df = pd.read_csv(data_location + '\\df_new_norm.csv')
+        # train test split
+        train_dataset = pd.DataFrame()
+        test_dataset = pd.DataFrame()
 
-    elif args.dataset == 'mnist' or 'fmnist':
-        if args.dataset == 'mnist':
-            data_dir = '../data/mnist/'
-        else:
-            data_dir = '../data/fmnist/'
+        for person in [30201, 21907011]:
+            
+            df_per_user = df[df['REGUSER'] == person]
+            
+            # train, test data 개수 구하기
+            train_count = int(len(df_per_user)*0.9)
+            
+            #train, test dataset 구축
+            train_dataset = pd.concat([train_dataset, df_per_user.iloc[:train_count,:]])
+            test_dataset = pd.concat([test_dataset, df_per_user.iloc[train_count:,:]])
 
-        apply_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))])
-
-        train_dataset = datasets.MNIST(data_dir, train=True, download=True,
-                                       transform=apply_transform)
-
-        test_dataset = datasets.MNIST(data_dir, train=False, download=True,
-                                      transform=apply_transform)
-
-        # sample training data amongst users
-        if args.iid:
-            # Sample IID user data from Mnist
-            user_groups = mnist_iid(train_dataset, args.num_users)
-        else:
-            # Sample Non-IID user data from Mnist
-            if args.unequal:
-                # Chose uneuqal splits for every user
-                user_groups = mnist_noniid_unequal(train_dataset, args.num_users)
-            else:
-                # Chose euqal splits for every user
-                user_groups = mnist_noniid(train_dataset, args.num_users)
-
-    return train_dataset, test_dataset, user_groups
+        dict_users = {}
+        #for person in df['REGUSER'].unique():
+        for person in [30201, 21907011]:
+            dict_users[person] =  train_dataset[train_dataset['REGUSER'] == person].index.tolist()
+        
+    return train_dataset, test_dataset, dict_users
 
 
 def average_weights(w):
