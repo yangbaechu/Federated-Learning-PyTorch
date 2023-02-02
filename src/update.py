@@ -144,5 +144,4 @@ def test_inference(args, model, test_dataset):
         loss += batch_loss.item()
         
         test_loss = loss/len(testloader)
-        print(test_loss)
     return test_loss

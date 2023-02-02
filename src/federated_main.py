@@ -32,11 +32,14 @@ if __name__ == '__main__':
 
     #if args.gpu_id:
     #    torch.cuda.set_device(args.gpu_id)
-    #device = 'cuda' if args.gpu else 'cpu'
-    device = 'cpu'
+    device = 'cuda' if args.gpu else 'cpu'
 
     # load dataset and user groups
     train_dataset, test_dataset, user_groups = get_dataset(args)
+
+    #client별 data 개수 배열
+    local_data = [len(data) for user, data in user_groups.items()]
+    client_id = [user for user in user_groups.keys()]
     
     # BUILD MODEL
     if args.model == 'cnn':
@@ -70,9 +73,6 @@ if __name__ == '__main__':
     #global_model.to(device)
     global_model.train()
 
-    # copy weights
-    global_weights = global_model.state_dict()
-
     # Training
     train_loss, train_accuracy = [], []
     val_acc_list, net_list = [], []
@@ -87,44 +87,26 @@ if __name__ == '__main__':
         print(f'\n | Global Training Round : {epoch+1} |\n')
 
         global_model.train()
-        #m = max(int(args.frac * args.num_users), 1)
-        m = 1
-        idxs_users = np.random.choice([30201, 21907011], m, replace=False)
-        print(idxs_users)
+        m = max(int(args.frac * args.num_users), 1)
+        #m = 1
+        idxs_users = np.random.choice(client_id, m, replace=False)
+        local_weights = [0 for _ in user_groups.keys()]
         
         for idx in idxs_users:
             local_model = LocalUpdate(args=args, dataset=train_dataset,
                                       idxs=user_groups[idx], logger=logger)
             w, loss = local_model.update_weights(
                 model=copy.deepcopy(global_model), global_round=epoch)
-            local_weights.append(copy.deepcopy(w))
+            local_weights[client_id.index(idx)] = copy.deepcopy(w)
             local_losses.append(copy.deepcopy(loss))
 
         # update global weights
-        global_weights = average_weights(local_weights)
+        global_weights = average_weights(global_model.state_dict(), local_weights, local_data)
         global_model.load_state_dict(global_weights)
 
         loss_avg = sum(local_losses) / len(local_losses)
         train_loss.append(loss_avg)
 
-        # Calculate avg training accuracy over all users
-        '''
-        list_acc, list_loss = [], []
-        global_model.eval()
-        for c in range(args.num_users):
-            local_model = LocalUpdate(args=args, dataset=train_dataset,
-                                      idxs=user_groups[idx], logger=logger)
-            loss = local_model.inference(model=global_model)
-
-            list_loss.append(loss)
-        train_accuracy.append(sum(list_acc)/len(list_acc))
-
-        # print global training loss after every 'i' rounds
-        if (epoch+1) % print_every == 0:
-            print(f' \nAvg Training Stats after {epoch+1} global rounds:')
-            print(f'Training Loss : {np.mean(np.array(train_loss))}')
-            print('Train Accuracy: {:.2f}% \n'.format(100*train_accuracy[-1]))
-        '''
     # Test inference after completion of training
     test_loss = test_inference(args, global_model, test_dataset)
 
@@ -157,12 +139,3 @@ if __name__ == '__main__':
     #             format(args.dataset, args.model, args.epochs, args.frac,
     #                    args.iid, args.local_ep, args.local_bs))
     #
-    # # Plot Average Accuracy vs Communication rounds
-    # plt.figure()
-    # plt.title('Average Accuracy vs Communication rounds')
-    # plt.plot(range(len(train_accuracy)), train_accuracy, color='k')
-    # plt.ylabel('Average Accuracy')
-    # plt.xlabel('Communication Rounds')
-    # plt.savefig('../save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_acc.png'.
-    #             format(args.dataset, args.model, args.epochs, args.frac,
-    #                    args.iid, args.local_ep, args.local_bs))
