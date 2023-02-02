@@ -13,6 +13,48 @@ def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
 
+def get_grad_vector(pp, grad_dims):
+    """
+     gather the gradients in one vector
+    """
+    grads = torch.Tensor(sum(grad_dims))
+    grads.fill_(0.0)
+    cnt = 0
+    for param in pp():
+        if param.grad is not None:
+            beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
+            en = sum(grad_dims[:cnt + 1])
+            grads[beg: en].copy_(param.grad.data.view(-1))
+        cnt += 1
+    return grads
+
+def add_memory_grad(pp, mem_grads, grad_dims):
+    """
+        This stores the gradient of a new memory and compute the dot product with the previously stored memories.
+        pp: parameters
+
+        mem_grads: gradients of previous memories
+        grad_dims: list with number of parameters per layers
+
+    """
+
+    # gather the gradient of the new memory
+    grads = get_grad_vector(pp, grad_dims)
+
+    if mem_grads is None:
+
+        mem_grads = grads.unsqueeze(dim=0)
+
+
+    else:
+
+        grads = grads.unsqueeze(dim=0)
+
+        mem_grads = torch.cat((mem_grads, grads), dim=0)
+
+    return mem_grads
+
+
 class MyDataset(torch.utils.data.Dataset):
     """ dataset."""
 
@@ -29,10 +71,11 @@ class MyDataset(torch.utils.data.Dataset):
         return self.len
 
 class NeuralNet(nn.Module):
-        def __init__(self, input_size, hidden_sizes, num_output):
+    def __init__(self, input_size, hidden_sizes, num_output):
             # the number of hidden layer >= 1
             super(NeuralNet, self).__init__()
             nhiddens = len(hidden_sizes)
+            
             self.fcs = []
             self.fcs.append(nn.Linear(input_size, hidden_sizes[0]).float())  # input - hidden
             for i in range(nhiddens - 1):   # middle
@@ -42,14 +85,23 @@ class NeuralNet(nn.Module):
 
             for i in range(nhiddens + 1):   # the number of hidden fcs (nhiddens) + in/out fcs (2)
                 self.add_module("fc" + str(i), self.fcs[i])
-            
-            #self.float()
+                
         
-        def forward(self, x):
-            out = x
-            for fc in self.fcs:
-                out = self.relu(fc(out))
-            return out
+    def forward(self, x):
+        out = x
+        for fc in self.fcs:
+            out = self.relu(fc(out))
+        return out
+
+    def cosine_similarity(self, x1, x2=None, eps=1e-8):
+        x2 = x1 if x2 is None else x2
+        w1 = x1.norm(p=2, dim=1, keepdim=True)
+
+        w2 = w1 if x2 is x1 else x2.norm(p=2, dim=1, keepdim=True)
+        sim= torch.mm(x1, x2.t())/(w1 * w2.t()) #, w1  # .clamp(min=eps), 1/cosinesim
+
+        return sim
+
 
 def get_train_valid_test(df_X, df_Y, ratio):
     # data split, 주어진비율대로 data를 나눈다
@@ -134,6 +186,7 @@ train_loader, valid_loader, criterion,  train_idxs, valid_idxs, test_idxs, adjus
             # Update
             optimizer.step()    
             optimizer.zero_grad()
+            
 
             # record training loss
             train_losses.append(loss.item())

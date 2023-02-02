@@ -60,5 +60,28 @@ def args_parser():
                         help='rounds of early stopping')
     parser.add_argument('--verbose', type=int, default=1, help='verbose')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    
+    #continual learning arguments
+    parser.add_argument('--n_memories', type=int, default=0,
+                        help='number of memories per task')
+    parser.add_argument('--n_sampled_memories', type=int, default=0,
+                        help='number of sampled_memories per task')
+    parser.add_argument('--n_constraints', type=int, default=0,
+                        help='number of constraints to use during online training')
+    parser.add_argument('--b_rehearse', type=int, default=0,
+                        help='if 1 use mini batch while rehearsing')
+    parser.add_argument('--tasks_to_preserve', type=int, default=1,
+                        help='number of tasks to preserve')
+    parser.add_argument('--change_th', type=float, default=0.0,
+                        help='gradients similarity change threshold for re-estimating the constraints')
+    parser.add_argument('--slack', type=float, default=0.01,
+                        help='slack for small gradient norm')
+    parser.add_argument('--normalize', type=str, default='no',
+                        help='normalize gradients before selection')
+    parser.add_argument('--memory_strength', default=0, type=float,
+                        help='memory strength (meaning depends on memory)')
+    parser.add_argument('--finetune', default='no', type=str,
+                        help='whether to initialize nets in indep. nets')
+    
     args = parser.parse_args()
     return args
