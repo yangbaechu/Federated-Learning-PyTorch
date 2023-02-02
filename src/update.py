@@ -14,13 +14,41 @@ def get_grad_vector(pp, grad_dims):
     grads = torch.Tensor(sum(grad_dims))
     grads.fill_(0.0)
     cnt = 0
-    for param in pp():
+    for param in pp(): #parameter.grad = 0
+        print(param)
+        print(param.grad)
         if param.grad is not None:
             beg = 0 if cnt == 0 else sum(grad_dims[:cnt])
             en = sum(grad_dims[:cnt + 1])
             grads[beg: en].copy_(param.grad.data.view(-1))
         cnt += 1
     return grads
+
+def add_memory_grad(pp, mem_grads, grad_dims):
+    """
+        This stores the gradient of a new memory and compute the dot product with the previously stored memories.
+        pp: parameters
+
+        mem_grads: gradients of previous memories
+        grad_dims: list with number of parameters per layers
+
+    """
+
+    # gather the gradient of the new memory
+    grads = get_grad_vector(pp, grad_dims)
+    #print(grads)
+    if mem_grads is None:
+
+        mem_grads = grads.unsqueeze(dim=0)
+
+
+    else:
+
+        grads = grads.unsqueeze(dim=0)
+
+        mem_grads = torch.cat((mem_grads, grads), dim=0)
+
+    return mem_grads
 
 
 class DatasetSplit(Dataset):
@@ -47,7 +75,7 @@ class DatasetSplit(Dataset):
 
 
 class LocalUpdate(object):
-    def __init__(self, args, dataset, idxs, logger, input_size):
+    def __init__(self, args, dataset, idxs, logger, input_size, output_size):
         self.args = args
         self.logger = logger
         self.trainloader, self.validloader, self.testloader = self.train_val_test(
@@ -64,7 +92,7 @@ class LocalUpdate(object):
         
         self.added_index = self.n_sampled_memories
         self.memory_data = torch.FloatTensor(self.n_memories, input_size)
-        self.memory_labs = torch.LongTensor(self.n_memories)
+        self.memory_labs = torch.FloatTensor(self.n_memories, output_size)
         
         # allocate  buffer
         self.sampled_memory_data = None
@@ -73,6 +101,7 @@ class LocalUpdate(object):
         self.subselect=args.subselect
         
         self.mem_cnt = 0
+        self.sim_th = args.change_th
         
     def cosine_similarity(self, x1, x2=None, eps=1e-8):
         x2 = x1 if x2 is None else x2
@@ -99,6 +128,38 @@ class LocalUpdate(object):
 
         return cosine_sim
 
+    def get_batch_sim(self,effective_batch_size, model):
+    
+        b_index = 0
+        self.mem_grads = None
+        shuffeled_inds = torch.randperm(self.sampled_memory_labs.size(0))
+
+        for _ in range(int(self.args.memory_strength)):
+            random_batch_inds = shuffeled_inds[
+                                b_index * effective_batch_size:b_index * effective_batch_size + effective_batch_size]
+            batch_x = self.sampled_memory_data[random_batch_inds]
+            batch_y = self.sampled_memory_labs[random_batch_inds]
+            b_index += 1
+            model.zero_grad()
+            loss = self.criterion(model.forward(batch_x), batch_y)
+            loss.backward()
+            #print(model.parameters())
+            #print(self.grad_dims)
+            self.mem_grads = add_memory_grad(model.parameters, self.mem_grads, self.grad_dims)
+            if b_index * effective_batch_size >= self.sampled_memory_labs.size(0):
+                break
+
+        model.zero_grad()
+        loss = self.criterion(model.forward(self.memory_data), self.memory_labs)
+        loss.backward()
+        this_grad = get_grad_vector(model.parameters, self.grad_dims).unsqueeze(0)
+        #print(self.mem_grads)
+        #print(this_grad)
+        batch_sim = max((self.cosine_similarity(self.mem_grads, this_grad)))
+        #print("batch_sim")
+        #print(batch_sim)
+
+        return batch_sim
 
     def train_val_test(self, dataset, idxs):
         """
@@ -126,12 +187,6 @@ class LocalUpdate(object):
         self.grad_dims = []
         for param in model.parameters():
             self.grad_dims.append(param.data.numel())
-
-        if self.sampled_memory_data is not None:
-            #shuffle buffer, determine batch size of buffer sampled memories
-            shuffeled_inds=torch.randperm(self.sampled_memory_labs.size(0))
-            effective_batch_size=min(self.n_constraints,self.sampled_memory_labs.size(0))
-            b_index=0
         
         #gradients of used buffer samples
         self.mem_grads = None
@@ -148,8 +203,33 @@ class LocalUpdate(object):
             batch_loss = []
             for batch_idx, (X, Y) in enumerate(self.trainloader):
 
+                #memory에 data 추가
+                batch_size = Y.data.size(0) #batch size = 8
+                
+                
+                endcnt = min(self.mem_cnt + batch_size, self.n_memories)
+                effbsz = endcnt - self.mem_cnt
+                self.memory_data[self.mem_cnt: endcnt].copy_(X[: effbsz])
+
+                if batch_size == 1:
+                    self.memory_labs[self.mem_cnt] = Y[0]
+                else:
+                    self.memory_labs[self.mem_cnt: endcnt].copy_(Y[: effbsz])
+                self.mem_cnt += effbsz
+
+                    
+                
+                if self.sampled_memory_data is not None:
+                    #shuffle buffer, determine batch size of buffer sampled memories
+                    shuffeled_inds=torch.randperm(self.sampled_memory_labs.size(0))
+                    effective_batch_size=min(self.n_constraints,self.sampled_memory_labs.size(0))
+                    b_index=0
+                    
                 model.zero_grad()
                 X, Y = X.to(torch.float32), Y.to(torch.float32)
+                
+                X = X.view(X.size(0), -1)
+
                 Y_predicted = model(X).to(torch.float32)
                 
                 loss = self.criterion(Y_predicted, Y)
@@ -163,12 +243,12 @@ class LocalUpdate(object):
                     random_batch_inds = shuffeled_inds[ b_index * effective_batch_size:b_index * effective_batch_size + effective_batch_size]
                     batch_x=self.sampled_memory_data[random_batch_inds]
                     batch_y = self.sampled_memory_labs[random_batch_inds]
-                    self.zero_grad()
+                    model.zero_grad()
 
-                    loss = self.ce(self.forward(batch_x), batch_y)
+                    loss = self.criterion(model.forward(batch_x), batch_y)
                     loss.backward()
 
-                    self.opt.step()
+                    optimizer.step()
                     b_index += 1
                     if b_index * effective_batch_size >= self.sampled_memory_labs.size(0):
                         b_index = 0
@@ -180,7 +260,7 @@ class LocalUpdate(object):
                     if self.sampled_memory_data is not None and self.n_sampled_memories<=self.sampled_memory_data.size(0):#buffer is full
 
 
-                        batch_sim=self.get_batch_sim(effective_batch_size)#estimate similarity score for the recieved samples to randomly drawn samples from buffer
+                        batch_sim=self.get_batch_sim(effective_batch_size, model)#estimate similarity score for the recieved samples to randomly drawn samples from buffer
                         # for effecency we estimate the similarity for the whole batch
 
                         if (batch_sim)<self.sim_th:
@@ -219,7 +299,7 @@ class LocalUpdate(object):
 
                             self.sampled_memory_cos=torch.zeros(added_inds.size(0)) + 0.1
                         else:
-                            self.get_batch_sim(effective_batch_size)#draw random samples from buffer
+                            self.get_batch_sim(effective_batch_size, model)#draw random samples from buffer
                             this_sampled_memory_cos = self.get_each_batch_sample_sim().clone()#estimate a score for each added sample
                             self.sampled_memory_cos = torch.cat((self.sampled_memory_cos, this_sampled_memory_cos.clone()),
                                                                 dim=0)
@@ -227,8 +307,10 @@ class LocalUpdate(object):
                             self.sampled_memory_labs = torch.cat(( self.sampled_memory_labs,self.memory_labs[added_inds].clone()),dim=0) 
                             
                     self.mem_cnt = 0
-                    self.train()
-                    
+                    model.train()
+                
+                elif  self.mem_cnt > self.n_memories:
+                    print("memory size 초과")
                            
                 if self.args.verbose and (batch_idx % 10 == 0):
                     print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(

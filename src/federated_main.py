@@ -93,8 +93,8 @@ if __name__ == '__main__':
         local_weights = [0 for _ in user_groups.keys()]
         
         for idx in idxs_users:
-            local_model = LocalUpdate(args=args, dataset=train_dataset,
-                                      idxs=user_groups[idx], logger=logger)
+            local_model = LocalUpdate(args=args, dataset=train_dataset,idxs=user_groups[idx],
+                                       logger=logger, input_size=input_size, output_size=num_output)
             w, loss = local_model.update_weights(
                 model=copy.deepcopy(global_model), global_round=epoch)
             local_weights[client_id.index(idx)] = copy.deepcopy(w)

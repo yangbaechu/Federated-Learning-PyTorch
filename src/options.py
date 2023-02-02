@@ -62,8 +62,8 @@ def args_parser():
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     
     #continual learning arguments
-    parser.add_argument('--n_memories', type=int, default=0,
-                        help='number of memories per task')
+    parser.add_argument('--n_memories', type=int, default=8,
+                        help='number of memories per client or task')
     parser.add_argument('--n_sampled_memories', type=int, default=0,
                         help='number of sampled_memories per task')
     parser.add_argument('--n_constraints', type=int, default=0,
@@ -78,10 +78,15 @@ def args_parser():
                         help='slack for small gradient norm')
     parser.add_argument('--normalize', type=str, default='no',
                         help='normalize gradients before selection')
-    parser.add_argument('--memory_strength', default=0, type=float,
+    parser.add_argument('--memory_strength', default=8, type=float,
                         help='memory strength (meaning depends on memory)')
     parser.add_argument('--finetune', default='no', type=str,
                         help='whether to initialize nets in indep. nets')
+    parser.add_argument('--age', type=float, default=1,
+                        help='consider age for sample selection')
+
+    parser.add_argument('--subselect', type=int, default=1,
+                        help='first subsample from recent memories')
     
     args = parser.parse_args()
     return args
